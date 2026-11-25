@@ -19,6 +19,6 @@ export type Stats = { claude: Row[]; codex: Row[]; at: number; chain?: number }
 
 declare module 'claude-code' {
   interface PluginState {
-    'codex-router': { stats: Shaped<Stats>; pinned: Shaped<boolean>; codex: Shaped<string>; write: Shaped<boolean>; off: Shaped<string>; guard: Shaped<boolean>; limits: Shaped<Limits> }
+    'codex-router': { stats: Shaped<Stats>; pinned: Shaped<boolean>; codex: Shaped<string>; write: Shaped<boolean>; off: Shaped<string>; guard: Shaped<boolean>; priority: Shaped<boolean>; limits: Shaped<Limits> }
   }
 }

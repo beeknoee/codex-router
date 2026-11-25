@@ -42,6 +42,11 @@ const guardOn = atom({ plugin: 'codex-router', key: 'guard' } as const, true, {
   shape: 'guard-1',
 })
 
+// Whether the user asked Claude to prefer Codex (the card's "Ưu tiên Codex" switch).
+const priorityOn = atom({ plugin: 'codex-router', key: 'priority' } as const, false, {
+  shape: 'prio-1',
+})
+
 // How much of Codex's usage limits is left (5 hours and a week), from bin/codex-limits.mjs.
 const NO_LIMITS: Limits = { at: 0, plan: '' }
 const limits = atom({ plugin: 'codex-router', key: 'limits' } as const, NO_LIMITS, {
@@ -554,6 +559,37 @@ async function toggleGuard($: any) {
   )
 }
 
+// The "Ưu tiên Codex" switch: while it is on, every prompt carries a short note (a hidden context
+// block, the user's own text is not touched) that tells Claude to hand Codex more work, including
+// the hard jobs. The truth is the file codex-priority.txt ("on" or "off"), shared by every session.
+const PRIORITY_NOTE =
+  'Codex priority is ON (the user switched it on in the chip card). Prefer Codex: hand it every read, search, analysis or drafting job that is clearly separable, from about 1k tokens of work, and give it the hard jobs too (hard bugs, architecture analysis, algorithm drafts, large diff reviews) with the hard tier instead of doing them yourself. You still decide, do the edits (unless write mode is on) and check the lines it cites. If it replies that Codex is switched off or paused, do the job yourself.'
+
+async function priorityFlagPath($: any): Promise<string> {
+  return (await ledgerPath($)).replace(/ledger\.jsonl$/, 'codex-priority.txt')
+}
+
+async function priorityIsOn($: any): Promise<boolean> {
+  try {
+    return String(await $.fs.read(await priorityFlagPath($))).trim() === 'on'
+  } catch {
+    return false
+  }
+}
+
+async function togglePriority($: any) {
+  const next = !(await priorityIsOn($))
+  try {
+    await $.fs.write(await priorityFlagPath($), next ? 'on' : 'off')
+  } catch {
+    $.ui.toast('Không ghi được công tắc ưu tiên Codex.')
+
+    return
+  }
+  await update($, priorityOn, () => next)
+  $.ui.toast(next ? 'Ưu tiên Codex: Claude sẽ giao nhiều việc hơn, kể cả việc khó.' : 'Đã tắt ưu tiên Codex.')
+}
+
 // Asks the limits script how much of Codex's 5 hour and weekly limits is used. It reads the
 // figures Codex wrote in its own session files, so it is as fresh as the last Codex turn on
 // this machine. A failure to ask keeps the last figures.
@@ -637,15 +673,18 @@ function limitBlock(Box: any, Text: any, l: Limits) {
 
   return (
     <Box key="codex-limits" flexDirection="column">
-      <Text dimColor>
-        {rows.length === 0
-          ? 'Hạn mức Codex: chưa có số liệu (chạy Codex một lần là có).'
-          : `Hạn mức Codex còn lại${l.plan ? ` · gói ${l.plan}` : ''}`}
-      </Text>
+      <Box flexDirection="row" gap={1}>
+        <Text dimColor>
+          {rows.length === 0
+            ? 'Hạn mức Codex: chưa có số liệu (chạy Codex một lần là có).'
+            : `Hạn mức Codex còn lại${l.plan ? ` · gói ${l.plan}` : ''}`}
+        </Text>
+        {rows.length > 0 && <Text dimColor>|</Text>}
+        {rows.length > 0 && (
+          <Text dimColor>{`Số liệu lúc ${hhmm(l.at)}, theo lần chạy Codex gần nhất trên máy này.`}</Text>
+        )}
+      </Box>
       {rows.map(row)}
-      {rows.length > 0 && (
-        <Text dimColor>{`Số liệu lúc ${hhmm(l.at)}, theo lần chạy Codex gần nhất trên máy này.`}</Text>
-      )}
     </Box>
   )
 }
@@ -758,6 +797,9 @@ function card(
   onOff: () => unknown,
   guard: boolean,
   onGuard: () => unknown,
+  priority: boolean,
+  onPriority: () => unknown,
+  shift: number,
   onClose: () => unknown,
 ) {
   const { pc } = share(s)
@@ -769,20 +811,15 @@ function card(
     <Box key="token-ratio-card" flexDirection="column" borderStyle="round" paddingX={1} gap={1}>
       <Box flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between">
-          <Text>
-            <Text color="cyan" bold>
-              Claude {pc ?? '–'}
-              {pc === null ? '' : '%'}
-            </Text>
-            <Text dimColor> · </Text>
-            <Text color="green" bold>
-              Codex {pc === null ? '–' : `${100 - pc}%`}
-            </Text>
-          </Text>
-          <Box flexDirection="row" gap={1}>
+          <Box flexDirection="row" gap={2} marginLeft={shift}>
             <Button plain label={off ? 'Codex tắt  ○━' : 'Codex bật  ━●'} onPress={onOff}>
               <Text>{off ? 'Codex tắt  ○━' : 'Codex bật  ━●'}</Text>
             </Button>
+            {!off && (
+              <Button plain label={priority ? 'Ưu tiên Codex  ━●' : 'Ưu tiên Codex  ○━'} onPress={onPriority}>
+                <Text>{priority ? 'Ưu tiên Codex  ━●' : 'Ưu tiên Codex  ○━'}</Text>
+              </Button>
+            )}
             {reserve > 0 && (
               <Button plain label={guard ? `Tự tắt ≤${reserve}%  ━●` : `Tự tắt ≤${reserve}%  ○━`} onPress={onGuard}>
                 <Text>{guard ? `Tự tắt ≤${reserve}%  ━●` : `Tự tắt ≤${reserve}%  ○━`}</Text>
@@ -793,18 +830,22 @@ function card(
                 <Text>{canWrite ? 'Sửa  ━●' : 'Đọc  ○━'}</Text>
               </Button>
             )}
-            <Button role="dismiss" onPress={onClose}>
-              ✕
-            </Button>
           </Box>
+          <Button role="dismiss" onPress={onClose}>
+            ✕
+          </Button>
         </Box>
         {pc === null ? (
           <Text dimColor>Chưa có số liệu.</Text>
         ) : (
-          <Text>
-            <Text color="cyan">{'█'.repeat(filled)}</Text>
-            <Text color="green">{'█'.repeat(width - filled)}</Text>
-          </Text>
+          <Box flexDirection="row" gap={1} marginTop="md">
+            <Text color="cyan" bold>{`Claude ${pc}%`}</Text>
+            <Text>
+              <Text color="cyan">{'█'.repeat(filled)}</Text>
+              <Text color="green">{'█'.repeat(width - filled)}</Text>
+            </Text>
+            <Text color="green" bold>{`Codex ${100 - pc}%`}</Text>
+          </Box>
         )}
       </Box>
 
@@ -885,6 +926,8 @@ export const register: Register = (on, options) => {
       await update($, codexOff, () => st)
       const g = await guardIsOn($)
       await update($, guardOn, () => g)
+      const pr = await priorityIsOn($)
+      await update($, priorityOn, () => pr)
       await applyGuard($)
     }
     void syncOff()
@@ -934,6 +977,15 @@ export const register: Register = (on, options) => {
     return { text: await historyText($) }
   })
 
+  // While the priority switch is on and Codex is available, each prompt carries the note as a hidden
+  // context block: the user's own words are not changed.
+  on('prompt.submit', async ($, e, next) => {
+    if (e.command || e.isMeta) return next(e)
+    if (!(await priorityIsOn($)) || (await offIsOn($))) return next(e)
+
+    return next({ ...e, context: [...(e.context ?? []), PRIORITY_NOTE] })
+  })
+
   on('turn.complete', async ($, e, next) => {
     void tick($)
     void checkLimits($)
@@ -974,6 +1026,7 @@ export const register: Register = (on, options) => {
     const lim = await read($, limits)
     const st = await read($, codexOff)
     const guard = await read($, guardOn)
+    const priority = await read($, priorityOn)
     const off = st !== 'enabled'
 
     return card(
@@ -989,6 +1042,9 @@ export const register: Register = (on, options) => {
       () => toggleOff($),
       guard,
       () => toggleGuard($),
+      priority,
+      () => togglePriority($),
+      e.surface === 'desktop' ? -1.5 : 0,
       () => update($, pinned, () => false),
     )
   })
