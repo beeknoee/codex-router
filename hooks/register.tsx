@@ -33,8 +33,13 @@ const codexState = atom({ plugin: 'codex-router', key: 'codex' } as const, 'unkn
 // Whether the user switched Codex off for every session. The switch in the card flips it; the
 // truth is the file `codex-off.txt` ("disabled" or "enabled") next to the ledger, which the
 // delegate script reads too, so a call then sends nothing to Codex.
-const codexOff = atom({ plugin: 'codex-router', key: 'off' } as const, false, {
-  shape: 'off-1',
+const codexOff = atom({ plugin: 'codex-router', key: 'off' } as const, 'enabled', {
+  shape: 'off-2',
+})
+
+// Whether the reserve guard is on (the card's "Tự tắt" switch); truth is codex-guard.txt.
+const guardOn = atom({ plugin: 'codex-router', key: 'guard' } as const, true, {
+  shape: 'guard-1',
 })
 
 // How much of Codex's usage limits is left (5 hours and a week), from bin/codex-limits.mjs.
@@ -460,25 +465,93 @@ async function offFlagPath($: any): Promise<string> {
   return (await ledgerPath($)).replace(/ledger\.jsonl$/, 'codex-off.txt')
 }
 
-async function offIsOn($: any): Promise<boolean> {
+type OffState = 'enabled' | 'disabled' | 'auto'
+
+// What the "Codex" switch says, from codex-off.txt: "disabled" (the user turned it off), "auto"
+// (the reserve guard turned it off) or "enabled"; absent means enabled.
+async function offState($: any): Promise<OffState> {
   try {
-    return String(await $.fs.read(await offFlagPath($))).trim() === 'disabled'
+    const v = String(await $.fs.read(await offFlagPath($))).trim()
+
+    return v === 'disabled' || v === 'auto' ? v : 'enabled'
   } catch {
-    return false
+    return 'enabled'
   }
 }
 
-// Flips the switch: writes the flag file first, then the value the card draws.
-async function toggleOff($: any) {
-  const next = !(await offIsOn($))
+// True while Codex is off, whoever turned it off.
+async function offIsOn($: any): Promise<boolean> {
+  return (await offState($)) !== 'enabled'
+}
+
+// Writes the flag file first, then the value the card draws.
+async function setOff($: any, v: OffState): Promise<boolean> {
   try {
-    await $.fs.write(await offFlagPath($), next ? 'disabled' : 'enabled')
+    await $.fs.write(await offFlagPath($), v)
   } catch {
-    $.ui.toast('Không ghi được công tắc tắt Codex.')
+    return false
+  }
+  await update($, codexOff, () => v)
+
+  return true
+}
+
+// The flag file of the guard switch: "on" or "off"; absent means on.
+async function guardFlagPath($: any): Promise<string> {
+  return (await ledgerPath($)).replace(/ledger\.jsonl$/, 'codex-guard.txt')
+}
+
+async function guardIsOn($: any): Promise<boolean> {
+  try {
+    return String(await $.fs.read(await guardFlagPath($))).trim() !== 'off'
+  } catch {
+    return true
+  }
+}
+
+// Keeps the Codex switch in line with the guard. Guard on and the 5 hour window at or below
+// the reserve: the switch turns itself off ("auto"). Window reset, or guard switched off: a
+// switch the guard turned off turns itself on again. A switch the user turned off is left alone.
+async function applyGuard($: any) {
+  const st = await offState($)
+  const low = (await guardIsOn($)) && pausedLeft(limitsNow) !== null
+  if (low && st === 'enabled') await setOff($, 'auto')
+  else if (!low && st === 'auto') await setOff($, 'enabled')
+}
+
+// The "Codex" switch. Turning it on while the guard holds it off is refused: the guard switch is the override.
+async function toggleOff($: any) {
+  const st = await offState($)
+  if (st === 'enabled') {
+    $.ui.toast((await setOff($, 'disabled')) ? 'Đã tắt giao việc cho Codex (mọi phiên).' : 'Không ghi được công tắc tắt Codex.')
+
     return
   }
-  await update($, codexOff, () => next)
-  $.ui.toast(next ? 'Đã tắt giao việc cho Codex (mọi phiên).' : 'Đã bật lại giao việc cho Codex.')
+  if ((await guardIsOn($)) && pausedLeft(limitsNow) !== null) {
+    $.ui.toast(`Hạn mức 5 giờ còn <= ${reserve}%. Tắt công tắc "Tự tắt" nếu vẫn muốn dùng Codex.`)
+
+    return
+  }
+  $.ui.toast((await setOff($, 'enabled')) ? 'Đã bật lại giao việc cho Codex.' : 'Không ghi được công tắc tắt Codex.')
+}
+
+// The guard switch: whether the reserve turns Codex off by itself.
+async function toggleGuard($: any) {
+  const next = !(await guardIsOn($))
+  try {
+    await $.fs.write(await guardFlagPath($), next ? 'on' : 'off')
+  } catch {
+    $.ui.toast('Không ghi được công tắc tự tắt Codex.')
+
+    return
+  }
+  await update($, guardOn, () => next)
+  await applyGuard($)
+  $.ui.toast(
+    next
+      ? `Bật tự tắt Codex khi hạn mức 5 giờ còn <= ${reserve}%.`
+      : 'Đã tắt chế độ tự tắt: Codex không tự dừng khi hạn mức thấp.',
+  )
 }
 
 // Asks the limits script how much of Codex's 5 hour and weekly limits is used. It reads the
@@ -492,6 +565,7 @@ async function checkLimits($: any) {
     const o = JSON.parse(r.stdout.trim() || '{}')
     limitsNow = o && o.at ? { at: o.at, plan: o.plan ?? '', p: o.p, s: o.s } : NO_LIMITS
     await update($, limits, () => limitsNow)
+    await applyGuard($)
   } catch {
     // keep the last figures
   }
@@ -577,15 +651,15 @@ function limitBlock(Box: any, Text: any, l: Limits) {
 }
 
 // The same figures as plain lines for `/codex-router`.
-function limitsText(l: Limits, off: boolean): string[] {
+function limitsText(l: Limits, st: OffState): string[] {
   const now = Date.now()
   const rows = winsOf(l)
 
   return [
     '',
-    ...(off ? ['Giao việc cho Codex: ĐANG TẮT (mọi phiên). Bật lại bằng công tắc trong thẻ.'] : []),
-    ...(!off && pausedLeft(l) !== null
-      ? [`Codex tạm dừng: hạn mức 5 giờ còn ${pausedLeft(l)}%, bằng hoặc dưới mức ${reserve}% giữ lại cho bạn. Tự chạy lại khi hạn mức đặt lại.`]
+    ...(st === 'disabled' ? ['Giao việc cho Codex: ĐANG TẮT (mọi phiên). Bật lại bằng công tắc trong thẻ.'] : []),
+    ...(st === 'auto'
+      ? [`Codex đã tự tắt: hạn mức 5 giờ còn <= ${reserve}%. Tự bật lại khi hạn mức đặt lại. Muốn dùng ngay thì tắt công tắc "Tự tắt" trong thẻ.`]
       : []),
     ...(rows.length === 0
       ? ['Hạn mức Codex: chưa có số liệu (chạy Codex một lần là có).']
@@ -606,7 +680,7 @@ function allLine(s: Stats): string {
 }
 
 // The breakdown that `/codex-router` prints into the chat.
-function detailText(s: Stats, lim: Limits, off: boolean): string {
+function detailText(s: Stats, lim: Limits, st: OffState): string {
   const { pc, c, x } = share(s)
   const head = pc === null ? 'Claude – · Codex –' : `Claude ${pc}% · Codex ${100 - pc}%`
   const rows = (rs: Row[], unit: string) =>
@@ -623,7 +697,7 @@ function detailText(s: Stats, lim: Limits, off: boolean): string {
     '',
     'Tỷ lệ theo token mới (input chưa cache + ghi cache + output). Chưa tính subagent của Claude.',
     allLine(s),
-    ...limitsText(lim, off),
+    ...limitsText(lim, st),
     ...(s.chain ? [`Gồm ${s.chain} phiên trước nối tiếp (sau compact hoặc tiếp tục).`] : []),
   ].join('\n')
 }
@@ -680,7 +754,10 @@ function card(
   onToggle: () => unknown,
   lim: Limits,
   off: boolean,
+  auto: boolean,
   onOff: () => unknown,
+  guard: boolean,
+  onGuard: () => unknown,
   onClose: () => unknown,
 ) {
   const { pc } = share(s)
@@ -706,6 +783,11 @@ function card(
             <Button plain label={off ? 'Codex tắt  ○━' : 'Codex bật  ━●'} onPress={onOff}>
               <Text>{off ? 'Codex tắt  ○━' : 'Codex bật  ━●'}</Text>
             </Button>
+            {reserve > 0 && (
+              <Button plain label={guard ? `Tự tắt ≤${reserve}%  ━●` : `Tự tắt ≤${reserve}%  ○━`} onPress={onGuard}>
+                <Text>{guard ? `Tự tắt ≤${reserve}%  ━●` : `Tự tắt ≤${reserve}%  ○━`}</Text>
+              </Button>
+            )}
             {!off && (
               <Button plain label={canWrite ? 'Sửa  ━●' : 'Đọc  ○━'} onPress={onToggle}>
                 <Text>{canWrite ? 'Sửa  ━●' : 'Đọc  ○━'}</Text>
@@ -758,11 +840,11 @@ function card(
       </Box>
 
       {limitBlock(Box, Text, lim)}
-      {off && (
-        <Text color="yellow">Đã tắt giao việc cho Codex ở mọi phiên: Claude tự làm hết, không gửi gì cho Codex. Bật lại bằng công tắc phía trên.</Text>
-      )}
-      {!off && pausedLeft(lim) !== null && (
+      {off && auto && (
         <Text color="yellow">Codex tạm dừng vì hạn mức 5 giờ còn {'<='} {reserve}%. Claude tiếp tục làm đến khi hạn mức đặt lại.</Text>
+      )}
+      {off && !auto && (
+        <Text color="yellow">Đã tắt giao việc cho Codex ở mọi phiên: Claude tự làm hết, không gửi gì cho Codex. Bật lại bằng công tắc phía trên.</Text>
       )}
       {canWrite && !off && (
         <Text color="yellow">Codex có thể sửa file trong thư mục dự án. Claude sẽ kiểm tra thay đổi (git diff) sau mỗi lần giao.</Text>
@@ -798,7 +880,13 @@ export const register: Register = (on, options) => {
     const syncWrite = () => flagIsOn($).then(isOn => update($, writeMode, () => isOn))
     void syncWrite()
     $.clock.every(5000, syncWrite)
-    const syncOff = () => offIsOn($).then(isOff => update($, codexOff, () => isOff))
+    const syncOff = async () => {
+      const st = await offState($)
+      await update($, codexOff, () => st)
+      const g = await guardIsOn($)
+      await update($, guardOn, () => g)
+      await applyGuard($)
+    }
     void syncOff()
     $.clock.every(5000, syncOff)
     void checkLimits($)
@@ -810,10 +898,13 @@ export const register: Register = (on, options) => {
   on('tool.run', { tool: TOOL }, async ($, e) => {
     const input = e as unknown as DelegateInput
     if (!input.prompt || !input.prompt.trim()) return { deny: 'codex_delegate: prompt is required.' }
-    if (await offIsOn($)) {
+    const off = await offState($)
+    if (off !== 'enabled') {
       return {
         result:
-          '[codex is switched off by the user: nothing was sent to Codex. Do this task yourself and do not call codex_delegate again in this conversation unless the user turns Codex back on.]',
+          off === 'auto'
+            ? '[codex is paused: its 5-hour limit is at or below the reserve the user keeps for themselves. Nothing was sent to Codex. Do this task yourself and do not call codex_delegate again until it starts again.]'
+            : '[codex is switched off by the user: nothing was sent to Codex. Do this task yourself and do not call codex_delegate again in this conversation unless the user turns Codex back on.]',
       }
     }
     const argv = delegateArgv(
@@ -836,7 +927,7 @@ export const register: Register = (on, options) => {
   on('command.run', { command: 'codex-router' }, async $ => {
     await tick($)
 
-    return { text: detailText(latest, limitsNow, await offIsOn($)) }
+    return { text: detailText(latest, limitsNow, await offState($)) }
   })
 
   on('command.run', { command: 'codex-history' }, async $ => {
@@ -881,7 +972,9 @@ export const register: Register = (on, options) => {
     const s = await read($, stats)
     const canWrite = await read($, writeMode)
     const lim = await read($, limits)
-    const off = await read($, codexOff)
+    const st = await read($, codexOff)
+    const guard = await read($, guardOn)
+    const off = st !== 'enabled'
 
     return card(
       Box,
@@ -892,7 +985,10 @@ export const register: Register = (on, options) => {
       () => toggleWrite($),
       lim,
       off,
+      st === 'auto',
       () => toggleOff($),
+      guard,
+      () => toggleGuard($),
       () => update($, pinned, () => false),
     )
   })

@@ -69,7 +69,10 @@ if (disabled) {
 // percent or less left, pause instead of calling Codex. It starts again by itself once the
 // window resets. --reserve 0 turns the guard off; no figures (never ran Codex) means go on.
 const reserve = args.reserve !== undefined && args.reserve !== '' && Number.isFinite(Number(args.reserve)) ? Number(args.reserve) : 20
-if (reserve > 0) {
+// The card's "Tự tắt" switch writes "off" to codex-guard.txt: then there is no pause at all.
+let guardOff = false
+try { guardOff = readFileSync(join(dirname(ledger), 'codex-guard.txt'), 'utf8').trim() === 'off' } catch {}
+if (reserve > 0 && !guardOff) {
   try {
     const here = dirname(fileURLToPath(import.meta.url))
     const lim = JSON.parse(execFileSync(process.execPath, [join(here, 'codex-limits.mjs')], { encoding: 'utf8', timeout: 15000 }))
