@@ -1,6 +1,6 @@
 {
   "name": "codex-router",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Route heavy work from Claude to the Codex CLI by difficulty tier, and show the Claude vs Codex token share of the session.",
   "author": {
     "name": "beeknoee"

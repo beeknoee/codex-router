@@ -561,12 +561,14 @@ async function toggleGuard($: any) {
 
 // The "Ưu tiên Codex" switch: while it is on, every prompt carries a short note (a hidden context
 // block, the user's own text is not touched) that tells Claude to hand Codex more work, including
-// the hard jobs. The truth is the file codex-priority.txt ("on" or "off"), shared by every session.
+// the hard jobs. The truth is the file codex-priority/<session>.txt ("on" or "off"): per session, like the Đọc/Sửa switch.
 const PRIORITY_NOTE =
   'Codex priority is ON (the user switched it on in the chip card). Prefer Codex: hand it every read, search, analysis or drafting job that is clearly separable, from about 1k tokens of work, and give it the hard jobs too (hard bugs, architecture analysis, algorithm drafts, large diff reviews) with the hard tier instead of doing them yourself. You still decide, do the edits (unless write mode is on) and check the lines it cites. If it replies that Codex is switched off or paused, do the job yourself.'
 
 async function priorityFlagPath($: any): Promise<string> {
-  return (await ledgerPath($)).replace(/ledger\.jsonl$/, 'codex-priority.txt')
+  const id: string = sessionId || (await $.session.id())
+
+  return `${(await ledgerPath($)).replace(/ledger\.jsonl$/, 'codex-priority')}/${id}.txt`
 }
 
 async function priorityIsOn($: any): Promise<boolean> {
