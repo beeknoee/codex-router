@@ -1,0 +1,11 @@
+# Written by Claude Code next to a plugin it loads for development
+.claude-plugin/types/
+
+# Node / editor / OS noise
+node_modules/
+.DS_Store
+Thumbs.db
+*.log
+
+# The usage ledger lives in ~/.claude/codex-router, never in this folder; keep it out if copied here
+ledger.jsonl

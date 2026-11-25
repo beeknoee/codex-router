@@ -1,0 +1,12 @@
+{
+  "name": "codex-router",
+  "description": "Plugins that route read-only work from Claude to the Codex CLI.",
+  "owner": { "name": "beeknoee" },
+  "plugins": [
+    {
+      "name": "codex-router",
+      "source": "./",
+      "description": "Hand read-only jobs to the Codex CLI by difficulty tier and see the Claude vs Codex token share of the session."
+    }
+  ]
+}

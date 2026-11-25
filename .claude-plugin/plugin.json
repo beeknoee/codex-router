@@ -1,0 +1,56 @@
+{
+  "name": "codex-router",
+  "version": "0.1.0",
+  "description": "Route heavy work from Claude to the Codex CLI by difficulty tier, and show the Claude vs Codex token share of the session.",
+  "author": {
+    "name": "beeknoee"
+  },
+  "homepage": "https://github.com/beeknoee/codex-router",
+  "repository": "https://github.com/beeknoee/codex-router",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "easy_model": {
+      "type": "string",
+      "title": "Easy tier: Codex model",
+      "description": "Model for mechanical or bulk work.",
+      "default": "gpt-6-luna"
+    },
+    "easy_effort": {
+      "type": "string",
+      "title": "Easy tier: reasoning effort",
+      "description": "low, medium, high, xhigh or max (what the model supports).",
+      "default": "low"
+    },
+    "medium_model": {
+      "type": "string",
+      "title": "Medium tier: Codex model",
+      "description": "Model for spec-driven feature work and moderate refactors.",
+      "default": "gpt-6.2-astra"
+    },
+    "medium_effort": {
+      "type": "string",
+      "title": "Medium tier: reasoning effort",
+      "description": "low, medium, high, xhigh or max (what the model supports).",
+      "default": "medium"
+    },
+    "hard_model": {
+      "type": "string",
+      "title": "Hard tier: Codex model",
+      "description": "Model for large refactors and hard bugs.",
+      "default": "gpt-6.2-sol"
+    },
+    "reserve_percent": {
+      "type": "string",
+      "title": "Keep this much of the 5-hour limit",
+      "description": "Pause Codex while its 5-hour limit has this many percent or less left, so you keep some for your own use. 0 turns the pause off.",
+      "default": "20"
+    },
+    "hard_effort": {
+      "type": "string",
+      "title": "Hard tier: reasoning effort",
+      "description": "low, medium, high, xhigh or max (what the model supports).",
+      "default": "high"
+    }
+  }
+}
